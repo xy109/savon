@@ -93,7 +93,7 @@ pub fn parse(bytes: &[u8]) -> Result<Wsdl, WsdlError> {
     let elements = Element::parse(bytes)?;
     trace!("elements: {:#?}", elements);
     let namespace_el = elements.get_child("import");
-    let target_namespace = if (namespace_el.is_some()) {
+    let target_namespace = if namespace_el.is_some() {
         namespace_el.unwrap().attributes.get("namespace").ok_or(WsdlError::AttributeNotFound("namespace"))?.to_string()
     } else {
         elements
@@ -224,7 +224,6 @@ pub fn parse(bytes: &[u8]) -> Result<Wsdl, WsdlError> {
                 .ok_or(WsdlError::AttributeNotFound("element"))?,
         )
             .to_string();
-
         messages.insert(
             name.to_string(),
             Message {

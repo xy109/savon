@@ -1,4 +1,4 @@
-use crate::wsdl::{parse, SimpleType, Type, Wsdl};
+use crate::wsdl::{parse, SimpleType, Type, Wsdl, Occurence};
 use case::CaseExt;
 use proc_macro2::{Ident, Literal, Span, TokenStream};
 use std::{fs::File, io::Write};
@@ -82,7 +82,7 @@ pub fn gen(wsdl: &Wsdl) -> Result<String, GenError> {
             }
             (None, Some(_)) => quote! {},
             (Some(out), None) => {
-                let out_name = Ident::new(&out, Span::call_site());
+                let out_name = Ident::new(&out.to_camel(), Span::call_site());
 
                 quote! {
                     pub async fn #op_name(&self, #input_name: #input_type) -> Result<Result<#out_name, ()>, savon::Error> {
@@ -140,6 +140,7 @@ pub fn gen(wsdl: &Wsdl) -> Result<String, GenError> {
                             };
 
                             let ft = match (attributes.min_occurs.as_ref(), attributes.max_occurs.as_ref()) {
+                                (Some(Occurence::Num(1)), Some(Occurence::Num(1))) => quote! { #ft },
                                 (Some(_), Some(_)) => quote! { Vec<#ft> },
                                 _ => quote! { #ft }
                             };
@@ -150,8 +151,8 @@ pub fn gen(wsdl: &Wsdl) -> Result<String, GenError> {
                             };
 
                             quote! {
-                            pub #fname: #ft,
-                        }
+                                pub #fname: #ft,
+                            }
                         })
                         .collect::<Vec<_>>();
 
@@ -173,45 +174,51 @@ pub fn gen(wsdl: &Wsdl) -> Result<String, GenError> {
                             let prefix = quote! { xmltree::Element::node(#ftype) };
 
                             match (attributes.min_occurs.as_ref(), attributes.max_occurs.as_ref()) {
-                                (Some(_), Some(_)) => if attributes.nillable {
-                                    quote! {
-                                  self.#fname.as_ref().map(|v| v.iter().map(|i| {
-                                      #prefix.with_children(i.to_elements())
-                                  }).collect()).unwrap_or_else(Vec::new)
-                              }
-                                } else {
-                                    quote! {
-                                  self.#fname.iter().map(|i| {
-                                      #prefix.with_children(i.to_elements())
-                                  }).collect()
-                              }
-                                },
-                                _ => {
+                                (Some(Occurence::Num(1)), Some(Occurence::Num(1))) | _ => {
                                     match field_type {
                                         SimpleType::Complex(_s) => quote! { vec![#prefix.with_children(self.#fname.to_elements())]},
                                         _ => quote! { vec![#prefix.with_text(self.#fname.to_string())] },
                                     }
                                 }
+                                (Some(_), Some(_)) => if attributes.nillable {
+                                    quote! {
+                                      self.#fname.as_ref().map(|v| v.iter().map(|i| {
+                                          #prefix.with_children(i.to_elements())
+                                      }).collect()).unwrap_or_else(Vec::new)
+                                    }
+                                } else {
+                                    quote! {
+                                      self.#fname.iter().map(|i| {
+                                          #prefix.with_children(i.to_elements())
+                                      }).collect()
+                                    }
+                                },
+                                // _ => {
+                                //     match field_type {
+                                //         SimpleType::Complex(_s) => quote! { vec![#prefix.with_children(self.#fname.to_elements())]},
+                                //         _ => quote! { vec![#prefix.with_text(self.#fname.to_string())] },
+                                //     }
+                                // }
                             }
                         })
                         .collect::<Vec<_>>();
 
                     let serialize_impl = if fields_serialize_impl.is_empty() {
                         quote! {
-                        impl savon::gen::ToElements for #type_name {
-                            fn to_elements(&self) -> Vec<xmltree::Element> {
-                                vec![]
+                            impl savon::gen::ToElements for #type_name {
+                                fn to_elements(&self) -> Vec<xmltree::Element> {
+                                    vec![]
+                                }
                             }
                         }
-                    }
                     } else {
                         quote! {
-                        impl savon::gen::ToElements for #type_name {
-                            fn to_elements(&self) -> Vec<xmltree::Element> {
-                                vec![#(#fields_serialize_impl),*].drain(..).flatten().collect()
+                            impl savon::gen::ToElements for #type_name {
+                                fn to_elements(&self) -> Vec<xmltree::Element> {
+                                    vec![#(#fields_serialize_impl),*].drain(..).flatten().collect()
+                                }
                             }
                         }
-                    }
                     };
 
                     let fields_deserialize_impl = c
@@ -268,7 +275,7 @@ pub fn gen(wsdl: &Wsdl) -> Result<String, GenError> {
                                                      ).map_err(savon::Error::from)
                                     .and_then(|s|
                                               s.parse::<savon::internal::chrono::DateTime<savon::internal::chrono::offset::Utc>>().map_err(savon::Error::from))
-                                };
+                                    };
                                     if attributes.nillable {
                                         quote! { #ft.ok(),}
                                     } else {
@@ -277,19 +284,18 @@ pub fn gen(wsdl: &Wsdl) -> Result<String, GenError> {
                                 }
                                 SimpleType::Complex(s) => {
                                     let complex_type = Ident::new(&s.to_camel(), Span::call_site());
-
                                     match (attributes.min_occurs.as_ref(), attributes.max_occurs.as_ref()) {
                                         (Some(_), Some(_)) => {
                                             let ft = quote! {
-                                            {
-                                                let mut v = vec![];
-                                                for elem in element.children.iter()
-                                                    .filter_map(|c| c.as_element()) {
-                                                        v.push(#complex_type::from_element(&elem)?);
-                                                    }
-                                                v
-                                            },
-                                        };
+                                                {
+                                                    let mut v = vec![];
+                                                    for elem in element.children.iter()
+                                                        .filter_map(|c| c.as_element()) {
+                                                            v.push(#complex_type::from_element(&elem)?);
+                                                        }
+                                                    v
+                                                },
+                                            };
 
                                             if attributes.nillable {
                                                 quote! { #fname: Some(#ft) }
@@ -353,10 +359,10 @@ pub fn gen(wsdl: &Wsdl) -> Result<String, GenError> {
             use savon::literal::*;
         }]
     };
-
     let messages = wsdl
         .messages
         .iter()
+        .filter(|&(name, _)| !wsdl.types.contains_key(name))
         .map(|(message_name, message)| {
             let mname = Ident::new(&message_name.to_camel(), Span::call_site());
             let iname = Ident::new(&message.part_element.to_camel(), Span::call_site());
